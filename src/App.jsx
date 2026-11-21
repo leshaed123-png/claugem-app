@@ -38,6 +38,8 @@ function Settings({ settings, onClose, onSave }) {
   const [model, setModel] = useState(settings.models[settings.provider] || '');
   const [auto, setAuto] = useState(settings.autoApprove);
   const p = settings.providers[provider];
+  const [free, setFree] = useState([]);
+  useEffect(() => { if (provider === 'openrouter') api.freeModels().then(setFree); }, [provider]);
 
   return (
     <div className="overlay" onClick={onClose}>
@@ -52,7 +54,9 @@ function Settings({ settings, onClose, onSave }) {
           <input type="password" placeholder={settings.hasKey[provider] ? '•••••••• (оставь пустым, чтобы не менять)' : 'вставь ключ'} value={key} onChange={(e) => setKey(e.target.value)} />
         </>) : <p className="hint">Ключ не нужен. Установи <a onClick={() => api.openUrl(p.keyUrl)}>Ollama</a> и выполни: <code>ollama pull {p.model}</code></p>}
         <label>Модель</label>
-        <input placeholder={p.model} value={model} onChange={(e) => setModel(e.target.value)} />
+        <input list="free-models" placeholder={p.model} value={model} onChange={(e) => setModel(e.target.value)} />
+        <datalist id="free-models">{free.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</datalist>
+        {provider === 'openrouter' && <p className="hint">Бесплатные модели с поддержкой инструментов ({free.length}), DeepSeek — первыми. Если лимит кончится, Claugem сам переключится на следующую.</p>}
         <label className="check"><input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> Выполнять команды без подтверждения</label>
         <div className="row">
           <button className="ghost" onClick={onClose}>Отмена</button>

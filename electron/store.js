@@ -6,7 +6,7 @@ const path = require('path');
 const PROVIDERS = {
   gemini:     { label: 'Google Gemini (бесплатный тариф)', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash', needsKey: true,  keyUrl: 'https://aistudio.google.com/apikey' },
   groq:       { label: 'Groq (бесплатный тариф)',          baseUrl: 'https://api.groq.com/openai/v1',                         model: 'llama-3.3-70b-versatile', needsKey: true, keyUrl: 'https://console.groq.com/keys' },
-  openrouter: { label: 'OpenRouter (есть :free модели)',   baseUrl: 'https://openrouter.ai/api/v1',                           model: 'qwen/qwen3-coder:free', needsKey: true, keyUrl: 'https://openrouter.ai/keys' },
+  openrouter: { label: 'OpenRouter — бесплатные DeepSeek и др.',   baseUrl: 'https://openrouter.ai/api/v1',                           model: 'deepseek/deepseek-v4-flash-0731:free', needsKey: true, keyUrl: 'https://openrouter.ai/keys' },
   ollama:     { label: 'Ollama (локально, без лимитов)',   baseUrl: 'http://localhost:11434/v1',                              model: 'qwen2.5-coder:7b', needsKey: false, keyUrl: 'https://ollama.com/download' },
   anthropic:  { label: 'Claude (платный API)',             baseUrl: 'https://api.anthropic.com/v1',                           model: 'claude-sonnet-5-5', needsKey: true, keyUrl: 'https://console.anthropic.com/settings/keys' }
 };
@@ -86,4 +86,37 @@ function writeSkill(name, description, content) {
   return n;
 }
 
-module.exports = { PROVIDERS, publicSettings, updateSettings, activeConfig, readMemory, appendMemory, listSkills, readSkill, writeSkill, skillsDir };
+// ---- Бесплатные модели OpenRouter (список обновляется сам) ----
+let freeCache = [];
+async function fetchFreeModels() {
+  const res = await fetch('https://openrouter.ai/api/v1/models');
+  if (!res.ok) throw new Error('OpenRouter models: ' + res.status);
+  const { data } = await res.json();
+  freeCache = data
+    .filter(m => Number(m.pricing?.prompt) === 0 && Number(m.pricing?.completion) === 0 && (m.supported_parameters || []).includes('tools') && !/^openrouter\//.test(m.id))
+    .sort((a, b) => (/deepseek/.test(b.id) - /deepseek/.test(a.id)) || ((b.context_length || 0) - (a.context_length || 0)))
+    .map(m => ({ id: m.id, name: m.name, context: m.context_length }));
+  return freeCache;
+}
+
+// Цепочка запасных вариантов: если провайдер упёрся в лимит — берём следующий
+async function fallbackChain(primary) {
+  const s = loadSettings();
+  const chain = [primary];
+  if (!freeCache.length) { try { await fetchFreeModels(); } catch {} }
+  const orKey = decrypt(s.keys.openrouter);
+  if (orKey) {
+    for (const m of freeCache.slice(0, 8)) {
+      if (primary.id === 'openrouter' && m.id === primary.model) continue;
+      chain.push({ ...primary, id: 'openrouter', baseUrl: PROVIDERS.openrouter.baseUrl, apiKey: orKey, model: m.id });
+    }
+  }
+  for (const id of ['gemini', 'groq']) {
+    const k = decrypt(s.keys[id]);
+    if (k && id !== primary.id) chain.push({ ...primary, id, baseUrl: PROVIDERS[id].baseUrl, apiKey: k, model: s.models[id] || PROVIDERS[id].model });
+  }
+  if (primary.id !== 'ollama') chain.push({ ...primary, id: 'ollama', baseUrl: PROVIDERS.ollama.baseUrl, apiKey: '', model: s.models.ollama || PROVIDERS.ollama.model });
+  return chain;
+}
+
+module.exports = { fetchFreeModels, fallbackChain, PROVIDERS, publicSettings, updateSettings, activeConfig, readMemory, appendMemory, listSkills, readSkill, writeSkill, skillsDir };

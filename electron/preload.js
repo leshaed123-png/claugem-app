@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('claugem', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (p) => ipcRenderer.invoke('settings:set', p),
   pickWorkspace: () => ipcRenderer.invoke('workspace:pick'),
+  freeModels: () => ipcRenderer.invoke('models:free'),
   listSkills: () => ipcRenderer.invoke('skills:list'),
   openUrl: (u) => ipcRenderer.invoke('open:url', u),
   send: (t) => ipcRenderer.invoke('chat:send', t),

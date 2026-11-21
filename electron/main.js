@@ -30,6 +30,7 @@ ipcMain.handle('workspace:pick', async () => {
   if (r.canceled) return store.publicSettings();
   return store.updateSettings({ workspace: r.filePaths[0] });
 });
+ipcMain.handle('models:free', () => store.fetchFreeModels().catch(() => []));
 ipcMain.handle('skills:list', () => store.listSkills());
 ipcMain.handle('open:url', (_e, url) => shell.openExternal(url));
 ipcMain.handle('chat:reset', () => { history = []; });

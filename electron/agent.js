@@ -32,27 +32,38 @@ ${memory || '(пока пусто)'}
 ${skills.length ? skills.map(s => `- ${s.name}: ${s.description}`).join('\n') : '(пока нет)'}`;
 }
 
-async function callModel(cfg, messages, signal, emit) {
-  const url = cfg.baseUrl.replace(/\/$/, '') + '/chat/completions';
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const res = await fetch(url, {
-      method: 'POST',
-      signal,
-      headers: { 'Content-Type': 'application/json', ...(cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {}) },
-      body: JSON.stringify({ model: cfg.model, messages, tools: tools.defs, tool_choice: 'auto' })
-    });
-    if (res.status === 429 || res.status >= 500) {
-      // Бесплатные тарифы часто упираются в лимиты — ждём и повторяем
-      const wait = Math.min(60, 5 * 2 ** attempt);
-      emit({ type: 'status', text: `Лимит провайдера (${res.status}), повтор через ${wait} с…` });
-      await sleep(wait * 1000, signal);
-      continue;
+const stripThink = (t) => (t || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+
+async function request(cfg, messages, signal) {
+  return fetch(cfg.baseUrl.replace(/\/$/, '') + '/chat/completions', {
+    method: 'POST', signal,
+    headers: { 'Content-Type': 'application/json', ...(cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {}) },
+    body: JSON.stringify({ model: cfg.model, messages, tools: tools.defs, tool_choice: 'auto' })
+  });
+}
+
+// Пробует основную модель, при лимитах/ошибках идёт по цепочке бесплатных запасных
+async function callModel(primary, messages, signal, emit) {
+  const chain = await store.fallbackChain(primary);
+  let firstErr = null;
+  for (const cfg of chain) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let res;
+      try { res = await request(cfg, messages, signal); }
+      catch (e) { if (signal.aborted) throw e; firstErr ??= e; break; }
+      if (res.status === 429 || res.status >= 500) {
+        if (attempt === 0) { emit({ type: 'status', text: `Лимит у ${cfg.model} (${res.status}), жду 4 с…` }); await sleep(4000, signal); continue; }
+        firstErr ??= new Error(`${cfg.model}: ${res.status}`); break;
+      }
+      if (!res.ok) { firstErr ??= new Error(`${cfg.model}: ${res.status} ${(await res.text()).slice(0, 300)}`); break; }
+      const data = await res.json();
+      const msg = data.choices?.[0]?.message;
+      if (!msg) { firstErr ??= new Error(`${cfg.model}: пустой ответ`); break; }
+      if (cfg.model !== primary.model) emit({ type: 'status', text: `Переключился на ${cfg.model}` });
+      return { ...msg, content: stripThink(msg.content) };
     }
-    if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 600)}`);
-    const data = await res.json();
-    return data.choices[0].message;
   }
-  throw new Error('Провайдер всё время отвечает ошибкой лимита. Смени провайдера в настройках или подожди.');
+  throw new Error('Все модели в цепочке недоступны. Первая ошибка: ' + (firstErr?.message || '?') + '. Добавь ключ OpenRouter/Gemini/Groq или запусти Ollama.');
 }
 
 async function runAgent({ history, userText, emit, confirm, signal }) {
