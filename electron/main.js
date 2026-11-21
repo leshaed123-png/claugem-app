@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const store = require('./store');
-const { runAgent } = require('./agent');
+const { runAgent, MODES } = require('./agent');
 
 let win;
 let history = [];
@@ -30,6 +30,8 @@ ipcMain.handle('workspace:pick', async () => {
   if (r.canceled) return store.publicSettings();
   return store.updateSettings({ workspace: r.filePaths[0] });
 });
+ipcMain.handle('models:list', () => store.listModels());
+ipcMain.handle('modes:list', () => Object.entries(MODES).map(([id, m]) => ({ id, label: m.label, hint: m.hint })));
 ipcMain.handle('models:free', () => store.fetchFreeModels().catch(() => []));
 ipcMain.handle('skills:list', () => store.listSkills());
 ipcMain.handle('open:url', (_e, url) => shell.openExternal(url));
@@ -37,7 +39,7 @@ ipcMain.handle('chat:reset', () => { history = []; });
 ipcMain.handle('chat:stop', () => { abort?.abort(); });
 ipcMain.on('confirm:response', (_e, { id, ok }) => { pendingConfirms.get(id)?.(ok); pendingConfirms.delete(id); });
 
-ipcMain.handle('chat:send', async (_e, text) => {
+ipcMain.handle('chat:send', async (_e, text, mode) => {
   abort = new AbortController();
   const emit = (ev) => win.webContents.send('agent:event', ev);
   const confirm = (command) => new Promise((resolve) => {
@@ -45,7 +47,7 @@ ipcMain.handle('chat:send', async (_e, text) => {
     pendingConfirms.set(id, resolve);
     emit({ type: 'confirm', id, command });
   });
-  try { await runAgent({ history, userText: text, emit, confirm, signal: abort.signal }); }
+  try { await runAgent({ history, userText: text, mode, emit, confirm, signal: abort.signal }); }
   catch (e) { emit({ type: 'error', text: e.message }); }
   emit({ type: 'done' });
 });

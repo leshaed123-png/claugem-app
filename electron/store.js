@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const PROVIDERS = {
+  pollinations: { label: 'Pollinations (без ключа и регистрации)', baseUrl: 'https://text.pollinations.ai/openai', model: 'openai', needsKey: false, native: false, keyUrl: 'https://pollinations.ai' },
   gemini:     { label: 'Google Gemini (бесплатный тариф)', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash', needsKey: true,  keyUrl: 'https://aistudio.google.com/apikey' },
   groq:       { label: 'Groq (бесплатный тариф)',          baseUrl: 'https://api.groq.com/openai/v1',                         model: 'llama-3.3-70b-versatile', needsKey: true, keyUrl: 'https://console.groq.com/keys' },
   openrouter: { label: 'OpenRouter — бесплатные DeepSeek и др.',   baseUrl: 'https://openrouter.ai/api/v1',                           model: 'deepseek/deepseek-v4-flash-0731:free', needsKey: true, keyUrl: 'https://openrouter.ai/keys' },
@@ -12,7 +13,7 @@ const PROVIDERS = {
 };
 
 const DEFAULTS = {
-  provider: 'gemini',
+  provider: 'pollinations',
   models: {},          // переопределение модели по провайдеру
   keys: {},            // зашифрованные ключи (base64)
   workspace: '',
@@ -57,7 +58,7 @@ function decrypt(v) {
 function publicSettings() {
   const s = loadSettings();
   return {
-    provider: s.provider, workspace: s.workspace, autoApprove: s.autoApprove,
+    provider: s.provider, workspace: s.workspace || defaultWorkspace(), autoApprove: s.autoApprove,
     models: s.models, hasKey: Object.fromEntries(Object.keys(PROVIDERS).map(k => [k, !!s.keys[k]])),
     providers: PROVIDERS
   };
@@ -72,10 +73,16 @@ function updateSettings(patch) {
   saveSettings(s);
   return publicSettings();
 }
+function defaultWorkspace() {
+  const d = path.join(app.getPath('documents'), 'Claugem');
+  fs.mkdirSync(d, { recursive: true });
+  return d;
+}
+const mk = (id, model, apiKey) => ({ id, baseUrl: PROVIDERS[id].baseUrl, model, apiKey, needsKey: PROVIDERS[id].needsKey, native: PROVIDERS[id].native !== false });
 function activeConfig() {
   const s = loadSettings();
-  const p = PROVIDERS[s.provider];
-  return { id: s.provider, baseUrl: p.baseUrl, model: s.models[s.provider] || p.model, apiKey: decrypt(s.keys[s.provider]), needsKey: p.needsKey, workspace: s.workspace, autoApprove: s.autoApprove };
+  const base = mk(s.provider, s.models[s.provider] || PROVIDERS[s.provider].model, decrypt(s.keys[s.provider]));
+  return { ...base, workspace: s.workspace || defaultWorkspace(), autoApprove: s.autoApprove };
 }
 
 // ---- Память и навыки (то, как агент «учится») ----
@@ -110,24 +117,47 @@ async function fetchFreeModels() {
   return freeCache;
 }
 
-// Цепочка запасных вариантов: если провайдер упёрся в лимит — берём следующий
+// ---- Pollinations: список моделей без ключа ----
+let pollCache = [];
+async function fetchPollinationsModels() {
+  if (pollCache.length) return pollCache;
+  try {
+    const res = await fetch('https://text.pollinations.ai/models');
+    const data = await res.json();
+    pollCache = (Array.isArray(data) ? data : []).map(m => ({ id: m.name || m.id, label: m.description || m.name || m.id }))
+      .filter(m => m.id && !/audio|vision|image/i.test(m.id))
+      .sort((a, b) => (/deepseek/i.test(b.id) - /deepseek/i.test(a.id)));
+  } catch {}
+  if (!pollCache.length) pollCache = [{ id: 'openai', label: 'GPT-класс' }, { id: 'deepseek', label: 'DeepSeek' }];
+  return pollCache;
+}
+
+// Готовый список для выбора в один клик
+async function listModels() {
+  const s = loadSettings();
+  const out = [];
+  for (const m of await fetchPollinationsModels()) out.push({ provider: 'pollinations', model: m.id, label: m.label, group: 'Без ключа · работает сразу', needsKey: false });
+  const fr = freeCache.length ? freeCache : await fetchFreeModels().catch(() => []);
+  for (const m of fr.slice(0, 40)) out.push({ provider: 'openrouter', model: m.id, label: m.name, group: 'OpenRouter · бесплатные (нужен бесплатный ключ)', needsKey: true });
+  for (const m of ['llama-3.3-70b-versatile', 'qwen/qwen3-32b', 'deepseek-r1-distill-llama-70b']) out.push({ provider: 'groq', model: m, label: m, group: 'Groq · бесплатно (нужен бесплатный ключ)', needsKey: true });
+  out.push({ provider: 'gemini', model: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', group: 'Google · бесплатно (нужен бесплатный ключ)', needsKey: true });
+  return out.map(o => ({ ...o, locked: o.needsKey && !s.keys[o.provider] }));
+}
+
+// Цепочка запасных вариантов: упёрлись в лимит — берём следующий бесплатный
 async function fallbackChain(primary) {
   const s = loadSettings();
   const chain = [primary];
-  if (!freeCache.length) { try { await fetchFreeModels(); } catch {} }
+  const seen = new Set([primary.id + primary.model]);
+  const add = (c) => { const k = c.id + c.model; if (!seen.has(k)) { seen.add(k); chain.push(c); } };
   const orKey = decrypt(s.keys.openrouter);
   if (orKey) {
-    for (const m of freeCache.slice(0, 8)) {
-      if (primary.id === 'openrouter' && m.id === primary.model) continue;
-      chain.push({ ...primary, id: 'openrouter', baseUrl: PROVIDERS.openrouter.baseUrl, apiKey: orKey, model: m.id });
-    }
+    if (!freeCache.length) { try { await fetchFreeModels(); } catch {} }
+    for (const m of freeCache.slice(0, 8)) add(mk('openrouter', m.id, orKey));
   }
-  for (const id of ['gemini', 'groq']) {
-    const k = decrypt(s.keys[id]);
-    if (k && id !== primary.id) chain.push({ ...primary, id, baseUrl: PROVIDERS[id].baseUrl, apiKey: k, model: s.models[id] || PROVIDERS[id].model });
-  }
-  if (primary.id !== 'ollama') chain.push({ ...primary, id: 'ollama', baseUrl: PROVIDERS.ollama.baseUrl, apiKey: '', model: s.models.ollama || PROVIDERS.ollama.model });
+  for (const id of ['gemini', 'groq']) { const k = decrypt(s.keys[id]); if (k) add(mk(id, s.models[id] || PROVIDERS[id].model, k)); }
+  for (const m of (await fetchPollinationsModels()).slice(0, 4)) add(mk('pollinations', m.id, ''));
   return chain;
 }
 
-module.exports = { fetchFreeModels, fallbackChain, PROVIDERS, publicSettings, updateSettings, activeConfig, readMemory, appendMemory, listSkills, readSkill, writeSkill, skillsDir };
+module.exports = { fetchFreeModels, fallbackChain, listModels, PROVIDERS, publicSettings, updateSettings, activeConfig, readMemory, appendMemory, listSkills, readSkill, writeSkill, skillsDir };
