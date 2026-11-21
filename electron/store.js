@@ -21,7 +21,18 @@ const DEFAULTS = {
 
 const dir = () => app.getPath('userData');
 const settingsFile = () => path.join(dir(), 'settings.json');
-const skillsDir = () => { const d = path.join(dir(), 'skills'); fs.mkdirSync(d, { recursive: true }); return d; };
+// Встроенные навыки копируются в папку пользователя при первом обращении (свои файлы не затираются)
+let seeded = false;
+const skillsDir = () => {
+  const d = path.join(dir(), 'skills');
+  fs.mkdirSync(d, { recursive: true });
+  if (!seeded) {
+    seeded = true;
+    const bundled = path.join(__dirname, '..', 'skills');
+    try { for (const f of fs.readdirSync(bundled)) if (!fs.existsSync(path.join(d, f))) fs.copyFileSync(path.join(bundled, f), path.join(d, f)); } catch {}
+  }
+  return d;
+};
 const memoryFile = () => path.join(dir(), 'memory.md');
 
 function loadSettings() {

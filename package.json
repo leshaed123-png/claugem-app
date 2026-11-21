@@ -7,13 +7,34 @@
     "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && cross-env CLAUGEM_DEV=1 electron .\"",
     "build": "vite build",
     "start": "vite build && electron .",
-    "dist": "vite build && electron-builder --mac"
+    "dist": "vite build && electron-builder --mac --publish never"
   },
   "build": {
     "appId": "com.claugem.app",
     "productName": "Claugem",
-    "files": ["dist/**", "electron/**", "package.json"],
-    "mac": { "category": "public.app-category.developer-tools", "target": ["dmg"] }
+    "files": [
+      "dist/**",
+      "electron/**",
+      "skills/**",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "identity": null,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Claugem-${version}-${arch}.dmg"
+    },
+    "directories": {
+      "output": "release"
+    }
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -27,5 +48,7 @@
     "electron-builder": "^25.1.8",
     "vite": "^5.4.11",
     "wait-on": "^8.0.1"
-  }
+  },
+  "author": "Claugem",
+  "homepage": "https://github.com/leshaed123-png/claugem-app"
 }

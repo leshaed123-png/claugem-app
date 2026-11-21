@@ -1,0 +1,35 @@
+name: Build macOS DMG
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install
+        run: npm install
+      - name: Build DMG (arm64 + x64)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run dist
+      - name: Upload as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Claugem-dmg
+          path: release/*.dmg
+      - name: Publish to Releases (tag "latest")
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest release/*.dmg --title "Claugem (latest build)" --notes "Автосборка из ветки main. Apple Silicon (M1–M4): arm64.dmg, Intel: x64.dmg." --target "$GITHUB_SHA"
